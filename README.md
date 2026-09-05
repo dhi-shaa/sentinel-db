@@ -1,5 +1,12 @@
 # SentinelDB — Fraud Detection Engine
-### DBMS End-Sem Project | Oracle PL/SQL + Flask + Vanilla JS
+
+Oracle PL/SQL-based fraud detection system with real-time transaction risk scoring, automated alerting, and account freezing — served through a Flask REST API and a vanilla-JS dashboard.
+
+---
+
+## Overview
+
+SentinelDB evaluates every incoming transaction against a set of configurable risk rules (rapid-fire frequency, high transaction amounts, 24-hour velocity, geo-location anomalies, and odd-hour activity), producing a 0–100 risk score. Transactions above defined thresholds are automatically flagged or blocked, and accounts with repeated high-risk activity are frozen without manual intervention.
 
 ---
 
@@ -8,52 +15,51 @@
 ```
 fraud_detection/
 ├── sql/
-│   ├── 01_schema.sql       ← Tables, sequences, seed rules
-│   ├── 02_plsql_logic.sql  ← Functions, procedures (risk engine)
-│   ├── 03_triggers.sql     ← 4 triggers (real-time detection)
-│   └── 04_seed_data.sql    ← Sample data + test scenarios
+│   ├── 01_schema.sql       ← Tables, sequences, and rule configuration
+│   ├── 02_plsql_logic.sql  ← Functions and procedures (risk scoring engine)
+│   ├── 03_triggers.sql     ← Real-time detection triggers
+│   └── 04_seed_data.sql    ← Sample data and test scenarios
 ├── backend/
-│   └── app.py              ← Flask REST API (cx_Oracle)
+│   └── app.py              ← Flask REST API
 └── frontend/
     └── templates/
-        └── index.html      ← Single-page dashboard UI
+        └── index.html      ← Dashboard UI
 ```
 
 ---
 
-## What Uses What (for your viva)
+## Core Components
 
-| Component | Oracle Feature | Purpose |
+| Component | Type | Purpose |
 |---|---|---|
-| `compute_risk_score` | **Function** | Returns 0–100 score for a transaction |
-| `raise_fraud_alert` | **Procedure** | Inserts alert + updates txn status |
-| `resolve_alert` | **Procedure** | Analyst clears an alert |
-| `batch_risk_audit` | **Procedure + Cursor** | Iterates PENDING txns, scores each |
-| `generate_account_report` | **Procedure + Cursor** | DBMS_OUTPUT report |
-| `trg_txn_fraud_check` | **AFTER INSERT Trigger** | Real-time scoring on every debit |
-| `trg_txn_audit_log` | **AFTER INSERT/UPDATE Trigger** | Immutable audit trail |
-| `trg_freeze_blocked_account` | **AFTER INSERT Trigger** | Auto-freezes accounts |
-| `trg_prevent_frozen_txn` | **BEFORE INSERT Trigger** | Hard block on frozen accounts |
-| `RISK_RULES` table | Configurable thresholds | No magic numbers in code |
+| `compute_risk_score` | Function | Returns a 0–100 risk score for a transaction |
+| `raise_fraud_alert` | Procedure | Inserts an alert and updates transaction status |
+| `resolve_alert` | Procedure | Marks an alert as resolved and restores transaction status |
+| `batch_risk_audit` | Procedure (cursor-driven) | Re-scores pending transactions in bulk |
+| `generate_account_report` | Procedure (cursor-driven) | Produces a per-account transaction summary |
+| `trg_txn_fraud_check` | Trigger (AFTER INSERT) | Scores each new debit/transfer in real time |
+| `trg_txn_audit_log` | Trigger (AFTER INSERT/UPDATE) | Maintains an immutable audit trail |
+| `trg_freeze_blocked_account` | Trigger (AFTER INSERT) | Automatically freezes accounts after repeated high-risk alerts |
+| `trg_prevent_frozen_txn` | Trigger (BEFORE INSERT) | Blocks new transactions on frozen accounts |
+| `RISK_RULES` table | Configuration | Stores risk thresholds so none are hardcoded in application logic |
 
 ---
 
-## Setup Instructions
+## Setup
 
-### Step 1 — Oracle DB
-Run SQL files in order in SQL*Plus or SQL Developer:
-```
+### 1. Database
+Run the SQL files in order using SQL*Plus or SQL Developer:
+```sql
 @01_schema.sql
 @02_plsql_logic.sql
 @03_triggers.sql
 @04_seed_data.sql
 ```
 
-### Step 2 — Python Backend
+### 2. Backend
 ```bash
-pip install flask cx_Oracle flask-cors
+pip install flask oracledb flask-cors
 
-# Set your Oracle credentials
 export ORACLE_USER=your_username
 export ORACLE_PASS=your_password
 export ORACLE_DSN=localhost:1521/XE
@@ -63,36 +69,21 @@ python app.py
 # Runs on http://localhost:5000
 ```
 
-### Step 3 — Open the UI
-Open `frontend/templates/index.html` in your browser
-**or** visit `http://localhost:5000` (Flask serves it).
+### 3. Frontend
+Open `frontend/templates/index.html` directly, or visit `http://localhost:5000`, since Flask serves it.
 
 ---
 
 ## Test Scenarios
 
-### 1. Rapid-fire (triggers RAPID_FIRE alert)
-Insert 3+ DEBIT transactions on the same account within 2 minutes.
-Use the **⚡ RAPID-FIRE PRESET** button in the Simulate tab.
-
-### 2. High amount (triggers HIGH_AMOUNT alert)
-Submit a DEBIT > ₹50,000. Use the **💸 HIGH-AMOUNT PRESET**.
-
-### 3. Geo-velocity
-Submit a DEBIT from Chennai, then immediately one from Mumbai
-on the same account. Within 30 min → GEO_VELOCITY alert.
-
-### 4. Account auto-freeze
-Accumulate 3 BLOCKED (risk ≥ 70) unresolved alerts on one account.
-`trg_freeze_blocked_account` fires and freezes it automatically.
-
-### 5. Frozen account block
-After an account is FROZEN, try inserting a transaction.
-`trg_prevent_frozen_txn` raises ORA-20001 and rejects it.
-
-### 6. Batch audit
-Hit **▶ RUN BATCH AUDIT** — calls `batch_risk_audit` procedure,
-which uses a cursor to iterate all PENDING transactions and score them.
+| Scenario | How to trigger it |
+|---|---|
+| Rapid-fire | Insert 3+ debit transactions on the same account within 2 minutes, or use the RAPID-FIRE preset in the Simulate tab |
+| High amount | Submit a debit above ₹50,000, or use the HIGH-AMOUNT preset |
+| Geo-velocity | Submit a debit from one city, then another from a different city on the same account within 30 minutes |
+| Account auto-freeze | Accumulate 3 unresolved high-risk (score ≥ 70) alerts on one account |
+| Frozen account block | Attempt a transaction on a frozen account — it is rejected with an ORA-20001 error |
+| Batch audit | Run the batch audit endpoint or button to re-score all pending transactions via a cursor-driven procedure |
 
 ---
 
@@ -100,12 +91,12 @@ which uses a cursor to iterate all PENDING transactions and score them.
 
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/api/health` | DB connectivity check |
-| GET | `/api/dashboard` | KPIs + breakdown + trend |
-| GET | `/api/transactions?status=FLAGGED` | Filtered transactions |
-| POST | `/api/transactions` | Insert new transaction (triggers fire) |
+| GET | `/api/health` | Database connectivity check |
+| GET | `/api/dashboard` | Summary metrics and trends |
+| GET | `/api/transactions?status=FLAGGED` | Filtered transaction list |
+| POST | `/api/transactions` | Insert a new transaction (triggers real-time scoring) |
 | GET | `/api/alerts?resolved=N` | Open fraud alerts |
 | POST | `/api/alerts/:id/resolve` | Resolve an alert |
-| GET | `/api/accounts` | All accounts with alert count |
-| POST | `/api/batch-audit` | Run batch_risk_audit procedure |
-| GET | `/api/logs` | Audit log (last 200 entries) |
+| GET | `/api/accounts` | All accounts with open alert counts |
+| POST | `/api/batch-audit` | Run the batch risk audit |
+| GET | `/api/logs` | Audit log (most recent 200 entries) |
