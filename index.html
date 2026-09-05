@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>SentinelDB — Fraud Detection Engine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet"/>
+<style>
+  /* ── Design tokens ───────────────────────────────────────── */
+  :root {
+    --bg:           #08090c;
+    --surface:      #0f1117;
+    --surface-2:    #161820;
+    --border:       #1e2030;
+    --border-bright:#2a2d3e;
+    --text:         #e2e4ef;
+    --muted:        #5a5e78;
+    --accent:       #f0c040;
+    --accent-dim:   #a88020;
+    --danger:       #ff4c4c;
+    --danger-dim:   #7a1a1a;
+    --warn:         #ff8c40;
+    --ok:           #40c07a;
+    --ok-dim:       #1a4a32;
+    --mono:         'Space Mono', monospace;
+    --sans:         'Syne', sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Scanline overlay ────────────────────────────────────── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(
+      0deg, transparent, transparent 2px,
+      rgba(255,255,255,0.015) 2px, rgba(255,255,255,0.015) 4px
+    );
+    pointer-events: none; z-index: 9999;
+  }
+
+  /* ── Layout ─────────────────────────────────────────────── */
+  .shell   { display: flex; height: 100vh; }
+  .sidebar { width: 220px; min-width: 220px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 24px 0; }
+  .main    { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+
+  /* ── Sidebar ─────────────────────────────────────────────── */
+  .logo {
+    padding: 0 20px 24px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 12px;
+  }
+  .logo-mark {
+    font-family: var(--sans);
+    font-weight: 800;
+    font-size: 18px;
+    letter-spacing: -0.5px;
+    color: var(--accent);
+  }
+  .logo-sub {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--muted);
+    letter-spacing: 2px;
+    margin-top: 2px;
+  }
+
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 20px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 0.5px;
+    border-left: 2px solid transparent;
+    transition: all 0.15s;
+  }
+  .nav-item:hover { color: var(--text); background: var(--surface-2); }
+  .nav-item.active { color: var(--accent); border-left-color: var(--accent); background: rgba(240,192,64,0.06); }
+  .nav-item .icon { font-size: 16px; width: 20px; text-align: center; }
+
+  .sidebar-bottom {
+    margin-top: auto;
+    padding: 16px 20px;
+    border-top: 1px solid var(--border);
+  }
+  .db-status {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .db-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--ok);
+    box-shadow: 0 0 6px var(--ok);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  /* ── Topbar ──────────────────────────────────────────────── */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 28px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    position: sticky; top: 0; z-index: 100;
+  }
+  .page-title { font-size: 20px; font-weight: 800; }
+  .page-sub   { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 1px; }
+
+  .topbar-actions { display: flex; gap: 10px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 14px;
+    border: 1px solid var(--border-bright);
+    background: var(--surface-2);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s;
+    letter-spacing: 0.5px;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn.primary { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 700; }
+  .btn.primary:hover { background: #ffd060; }
+  .btn.danger { background: var(--danger-dim); border-color: var(--danger); color: var(--danger); }
+
+  /* ── Page content ────────────────────────────────────────── */
+  .content { padding: 24px 28px; flex: 1; }
+  .view { display: none; }
+  .view.active { display: block; }
+
+  /* ── KPI cards ───────────────────────────────────────────── */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .kpi {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 18px 20px;
+    position: relative;
+    overflow: hidden;
+    animation: fadeUp 0.4s ease both;
+  }
+  .kpi::after {
+    content: '';
+    position: absolute; bottom: 0; left: 0; right: 0; height: 2px;
+  }
+  .kpi.yellow::after { background: var(--accent); }
+  .kpi.red::after    { background: var(--danger); }
+  .kpi.orange::after { background: var(--warn); }
+  .kpi.green::after  { background: var(--ok); }
+
+  .kpi-label { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: 1px; margin-bottom: 8px; }
+  .kpi-value { font-size: 36px; font-weight: 800; line-height: 1; }
+  .kpi.yellow .kpi-value { color: var(--accent); }
+  .kpi.red .kpi-value    { color: var(--danger); }
+  .kpi.orange .kpi-value { color: var(--warn); }
+  .kpi.green .kpi-value  { color: var(--ok); }
+
+  /* ── Section titles ─────────────────────────────────────── */
+  .section-title {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--muted);
+    margin-bottom: 12px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .section-title::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+  /* ── Tables ──────────────────────────────────────────────── */
+  .table-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+  table { width: 100%; border-collapse: collapse; }
+  thead th {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 1px;
+    color: var(--muted);
+    text-align: left;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-2);
+  }
+  tbody tr {
+    border-bottom: 1px solid var(--border);
+    transition: background 0.1s;
+    animation: fadeUp 0.3s ease both;
+  }
+  tbody tr:hover { background: var(--surface-2); }
+  tbody tr:last-child { border-bottom: none; }
+  td { padding: 11px 14px; font-size: 13px; }
+  td.mono { font-family: var(--mono); font-size: 11px; }
+
+  /* ── Badges ──────────────────────────────────────────────── */
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.5px;
+    font-weight: 700;
+    border: 1px solid;
+  }
+  .badge-approved  { color: var(--ok);     border-color: var(--ok);     background: var(--ok-dim); }
+  .badge-pending   { color: var(--accent); border-color: var(--accent-dim); background: rgba(240,192,64,0.08); }
+  .badge-flagged   { color: var(--warn);   border-color: var(--warn);   background: rgba(255,140,64,0.1); }
+  .badge-blocked   { color: var(--danger); border-color: var(--danger); background: var(--danger-dim); }
+  .badge-frozen    { color: var(--danger); border-color: var(--danger); background: var(--danger-dim); }
+  .badge-active    { color: var(--ok);     border-color: var(--ok);     background: var(--ok-dim); }
+
+  /* ── Risk score bar ──────────────────────────────────────── */
+  .risk-bar { display: flex; align-items: center; gap: 8px; }
+  .risk-track { flex: 1; height: 4px; background: var(--border); max-width: 80px; }
+  .risk-fill { height: 100%; transition: width 0.6s ease; }
+  .risk-num { font-family: var(--mono); font-size: 11px; min-width: 28px; }
+
+  /* ── Form (add transaction) ──────────────────────────────── */
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .field label {
+    display: block;
+    font-family: var(--mono); font-size: 10px;
+    color: var(--muted); letter-spacing: 1px; margin-bottom: 6px;
+  }
+  .field input, .field select {
+    width: 100%; padding: 9px 12px;
+    background: var(--surface-2);
+    border: 1px solid var(--border-bright);
+    color: var(--text);
+    font-family: var(--mono); font-size: 12px;
+    outline: none; transition: border 0.15s;
+  }
+  .field input:focus, .field select:focus { border-color: var(--accent); }
+  .field select option { background: var(--surface-2); }
+
+  /* ── Alert result box ────────────────────────────────────── */
+  .result-box {
+    margin-top: 16px;
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    font-family: var(--mono); font-size: 12px;
+    display: none;
+  }
+  .result-box.show { display: block; }
+  .result-box.ok     { border-color: var(--ok);     background: rgba(64,192,122,0.06); }
+  .result-box.warn   { border-color: var(--warn);   background: rgba(255,140,64,0.06); }
+  .result-box.danger { border-color: var(--danger); background: rgba(255,76,76,0.06); }
+
+  /* ── Animations ──────────────────────────────────────────── */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── Toast ───────────────────────────────────────────────── */
+  #toast {
+    position: fixed; bottom: 24px; right: 24px;
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    padding: 10px 18px;
+    font-family: var(--mono); font-size: 11px;
+    opacity: 0; transform: translateY(10px);
+    transition: all 0.3s;
+    z-index: 10000;
+    pointer-events: none;
+  }
+  #toast.show { opacity: 1; transform: translateY(0); }
+
+  /* ── Filters ─────────────────────────────────────────────── */
+  .filters { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .filter-btn {
+    padding: 5px 12px;
+    font-family: var(--mono); font-size: 10px;
+    border: 1px solid var(--border-bright);
+    background: transparent;
+    color: var(--muted); cursor: pointer; letter-spacing: 0.5px;
+    transition: all 0.15s;
+  }
+  .filter-btn:hover, .filter-btn.active {
+    border-color: var(--accent); color: var(--accent);
+    background: rgba(240,192,64,0.06);
+  }
+
+  /* ── Empty state ─────────────────────────────────────────── */
+  .empty { text-align: center; padding: 40px; color: var(--muted); font-family: var(--mono); font-size: 12px; }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+
+  @media (max-width: 900px) {
+    .kpi-grid { grid-template-columns: repeat(2,1fr); }
+    .two-col  { grid-template-columns: 1fr; }
+    .form-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <!-- ── Sidebar ─────────────────────────────────────── -->
+  <nav class="sidebar">
+    <div class="logo">
+      <div class="logo-mark">⬡ SentinelDB</div>
+      <div class="logo-sub">FRAUD DETECTION ENGINE</div>
+    </div>
+
+    <div class="nav-item active" data-view="dashboard">
+      <span class="icon">▦</span> Dashboard
+    </div>
+    <div class="nav-item" data-view="transactions">
+      <span class="icon">⇄</span> Transactions
+    </div>
+    <div class="nav-item" data-view="alerts">
+      <span class="icon">⚠</span> Alerts
+    </div>
+    <div class="nav-item" data-view="accounts">
+      <span class="icon">◎</span> Accounts
+    </div>
+    <div class="nav-item" data-view="simulate">
+      <span class="icon">▶</span> Simulate
+    </div>
+    <div class="nav-item" data-view="audit">
+      <span class="icon">≡</span> Audit Log
+    </div>
+
+    <div class="sidebar-bottom">
+      <div class="db-status">
+        <div class="db-dot" id="db-dot"></div>
+        <span id="db-status-text">Oracle XE</span>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ── Main ───────────────────────────────────────── -->
+  <div class="main">
+
+    <!-- Topbar -->
+    <div class="topbar">
+      <div>
+        <div class="page-title" id="page-title">Dashboard</div>
+        <div class="page-sub" id="page-sub">REAL-TIME FRAUD MONITORING</div>
+      </div>
+      <div class="topbar-actions">
+        <button class="btn" onclick="refreshAll()">↻ REFRESH</button>
+        <button class="btn primary" onclick="runBatchAudit()">▶ RUN BATCH AUDIT</button>
+      </div>
+    </div>
+
+    <div class="content">
+
+      <!-- ═══════════ DASHBOARD ═══════════ -->
+      <div class="view active" id="view-dashboard">
+        <div class="kpi-grid" id="kpi-grid">
+          <div class="kpi yellow"><div class="kpi-label">PENDING</div><div class="kpi-value" id="kpi-pending">—</div></div>
+          <div class="kpi orange"><div class="kpi-label">FLAGGED / BLOCKED</div><div class="kpi-value" id="kpi-flagged">—</div></div>
+          <div class="kpi red"><div class="kpi-label">OPEN ALERTS</div><div class="kpi-value" id="kpi-alerts">—</div></div>
+          <div class="kpi red"><div class="kpi-label">FROZEN ACCOUNTS</div><div class="kpi-value" id="kpi-frozen">—</div></div>
+        </div>
+
+        <div class="two-col">
+          <div>
+            <div class="section-title">ALERT TYPE BREAKDOWN</div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>ALERT TYPE</th><th>COUNT</th></tr></thead>
+                <tbody id="breakdown-body"><tr><td colspan="2" class="empty">Loading…</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+          <div>
+            <div class="section-title">7-DAY TREND</div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>DAY</th><th>TOTAL TXN</th><th>SUSPICIOUS</th></tr></thead>
+                <tbody id="trend-body"><tr><td colspan="3" class="empty">Loading…</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════ TRANSACTIONS ═══════════ -->
+      <div class="view" id="view-transactions">
+        <div class="filters">
+          <button class="filter-btn active" data-status="">ALL</button>
+          <button class="filter-btn" data-status="PENDING">PENDING</button>
+          <button class="filter-btn" data-status="APPROVED">APPROVED</button>
+          <button class="filter-btn" data-status="FLAGGED">FLAGGED</button>
+          <button class="filter-btn" data-status="BLOCKED">BLOCKED</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>TXN ID</th><th>CUSTOMER</th><th>TYPE</th>
+                <th>AMOUNT (₹)</th><th>MERCHANT</th>
+                <th>CITY</th><th>CHANNEL</th><th>TIME</th><th>STATUS</th>
+              </tr>
+            </thead>
+            <tbody id="txn-body"><tr><td colspan="9" class="empty">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ═══════════ ALERTS ═══════════ -->
+      <div class="view" id="view-alerts">
+        <div class="filters">
+          <button class="filter-btn active" data-resolved="N">OPEN</button>
+          <button class="filter-btn" data-resolved="Y">RESOLVED</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ALERT ID</th><th>TXN</th><th>CUSTOMER</th>
+                <th>TYPE</th><th>RISK SCORE</th>
+                <th>DESCRIPTION</th><th>RAISED AT</th><th>ACTION</th>
+              </tr>
+            </thead>
+            <tbody id="alert-body"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ═══════════ ACCOUNTS ═══════════ -->
+      <div class="view" id="view-accounts">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ACCOUNT ID</th><th>CUSTOMER</th><th>TYPE</th>
+                <th>BALANCE (₹)</th><th>STATUS</th><th>OPEN ALERTS</th>
+              </tr>
+            </thead>
+            <tbody id="acc-body"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ═══════════ SIMULATE ═══════════ -->
+      <div class="view" id="view-simulate">
+        <div class="section-title">INSERT NEW TRANSACTION</div>
+        <div style="background:var(--surface);border:1px solid var(--border);padding:24px;max-width:640px;">
+          <div class="form-grid">
+            <div class="field">
+              <label>ACCOUNT ID</label>
+              <input type="number" id="f-account" placeholder="e.g. 5001"/>
+            </div>
+            <div class="field">
+              <label>TYPE</label>
+              <select id="f-type">
+                <option value="DEBIT">DEBIT</option>
+                <option value="CREDIT">CREDIT</option>
+                <option value="TRANSFER">TRANSFER</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>AMOUNT (₹)</label>
+              <input type="number" id="f-amount" placeholder="e.g. 5000"/>
+            </div>
+            <div class="field">
+              <label>MERCHANT</label>
+              <input type="text" id="f-merchant" placeholder="e.g. Amazon"/>
+            </div>
+            <div class="field">
+              <label>CITY</label>
+              <input type="text" id="f-city" placeholder="e.g. Chennai"/>
+            </div>
+            <div class="field">
+              <label>CHANNEL</label>
+              <select id="f-channel">
+                <option>ONLINE</option><option>ATM</option>
+                <option>POS</option><option>MOBILE</option>
+              </select>
+            </div>
+          </div>
+          <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;">
+            <button class="btn primary" onclick="submitTransaction()">▶ SUBMIT TRANSACTION</button>
+            <button class="btn" onclick="fillRapidFire()">⚡ RAPID-FIRE PRESET</button>
+            <button class="btn" onclick="fillHighAmount()">💸 HIGH-AMOUNT PRESET</button>
+          </div>
+          <div id="txn-result" class="result-box"></div>
+        </div>
+
+        <div style="margin-top:28px;">
+          <div class="section-title">QUICK SCENARIO GUIDE</div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>SCENARIO</th><th>WHAT IT TRIGGERS</th><th>HOW TO TEST</th></tr></thead>
+              <tbody>
+                <tr><td>Rapid-fire</td><td>trg_txn_fraud_check → RAPID_FIRE alert</td><td>Submit 3+ debits on same account in &lt;2 min</td></tr>
+                <tr><td>High amount</td><td>compute_risk_score → HIGH_AMOUNT</td><td>Amount &gt; ₹50,000</td></tr>
+                <tr><td>Geo-velocity</td><td>Location jump within 30 min</td><td>Submit from Chennai, then immediately Mumbai</td></tr>
+                <tr><td>Account freeze</td><td>trg_freeze_blocked_account</td><td>Accumulate 3 BLOCKED alerts on same account</td></tr>
+                <tr><td>Frozen block</td><td>trg_prevent_frozen_txn</td><td>Try inserting after account is FROZEN</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════ AUDIT LOG ═══════════ -->
+      <div class="view" id="view-audit">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>LOG ID</th><th>TXN ID</th><th>ACCOUNT</th>
+                <th>EVENT</th><th>OLD STATUS</th><th>NEW STATUS</th>
+                <th>TIME</th><th>NOTES</th>
+              </tr>
+            </thead>
+            <tbody id="log-body"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script>
+// ── Config ────────────────────────────────────────────────────
+const API = 'http://localhost:5000/api';
+
+// ── Navigation ────────────────────────────────────────────────
+document.querySelectorAll('.nav-item').forEach(item => {
+  item.addEventListener('click', () => {
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    item.classList.add('active');
+    const view = item.dataset.view;
+    document.getElementById('view-' + view).classList.add('active');
+    const titles = {
+      dashboard:'Dashboard', transactions:'Transactions',
+      alerts:'Fraud Alerts', accounts:'Accounts',
+      simulate:'Simulate Transaction', audit:'Audit Log'
+    };
+    document.getElementById('page-title').textContent = titles[view] || view;
+    loadView(view);
+  });
+});
+
+function loadView(v) {
+  if (v === 'dashboard')    loadDashboard();
+  if (v === 'transactions') loadTransactions('');
+  if (v === 'alerts')       loadAlerts('N');
+  if (v === 'accounts')     loadAccounts();
+  if (v === 'audit')        loadLogs();
+}
+
+// ── DB status check ───────────────────────────────────────────
+async function checkDB() {
+  try {
+    const r = await fetch(API + '/health');
+    const d = await r.json();
+    const dot  = document.getElementById('db-dot');
+    const text = document.getElementById('db-status-text');
+    if (d.status === 'ok') {
+      dot.style.background = 'var(--ok)';
+      text.textContent = 'Oracle XE · OK';
+    } else throw new Error();
+  } catch {
+    document.getElementById('db-dot').style.background = 'var(--danger)';
+    document.getElementById('db-status-text').textContent = 'DB disconnected';
+  }
+}
+
+// ── Dashboard ─────────────────────────────────────────────────
+async function loadDashboard() {
+  try {
+    const d = await fetchJSON('/dashboard');
+    document.getElementById('kpi-pending').textContent = d.pending;
+    document.getElementById('kpi-flagged').textContent = d.flagged;
+    document.getElementById('kpi-alerts').textContent  = d.open_alerts;
+    document.getElementById('kpi-frozen').textContent  = d.frozen_accounts;
+
+    document.getElementById('breakdown-body').innerHTML =
+      d.alert_breakdown.length
+        ? d.alert_breakdown.map(r => `
+            <tr>
+              <td>${r.alert_type}</td>
+              <td class="mono">${r.cnt}</td>
+            </tr>`).join('')
+        : '<tr><td colspan="2" class="empty">No alerts yet</td></tr>';
+
+    document.getElementById('trend-body').innerHTML =
+      d.weekly_trend.length
+        ? d.weekly_trend.map(r => `
+            <tr>
+              <td class="mono">${r.day}</td>
+              <td>${r.total}</td>
+              <td style="color:${r.suspicious>0?'var(--warn)':'var(--ok)'}">
+                ${r.suspicious}
+              </td>
+            </tr>`).join('')
+        : '<tr><td colspan="3" class="empty">No data</td></tr>';
+  } catch(e) { console.error(e); }
+}
+
+// ── Transactions ──────────────────────────────────────────────
+let txnStatusFilter = '';
+async function loadTransactions(status) {
+  txnStatusFilter = status;
+  document.querySelectorAll('#view-transactions .filter-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.status === status);
+  });
+  try {
+    const data = await fetchJSON('/transactions' + (status ? '?status='+status : ''));
+    document.getElementById('txn-body').innerHTML = data.length
+      ? data.map(r => `<tr>
+          <td class="mono">#${r.txn_id}</td>
+          <td>${r.full_name}</td>
+          <td><span class="badge badge-${r.txn_type === 'DEBIT' ? 'flagged' : 'approved'}">${r.txn_type}</span></td>
+          <td class="mono">₹${Number(r.amount).toLocaleString('en-IN')}</td>
+          <td>${r.merchant || '—'}</td>
+          <td>${r.location_city || '—'}</td>
+          <td class="mono">${r.channel}</td>
+          <td class="mono">${r.txn_time}</td>
+          <td><span class="badge badge-${r.status.toLowerCase()}">${r.status}</span></td>
+        </tr>`).join('')
+      : '<tr><td colspan="9" class="empty">No transactions found</td></tr>';
+  } catch(e) { console.error(e); }
+}
+
+document.querySelectorAll('#view-transactions .filter-btn').forEach(b => {
+  b.addEventListener('click', () => loadTransactions(b.dataset.status));
+});
+
+// ── Alerts ────────────────────────────────────────────────────
+async function loadAlerts(resolved) {
+  document.querySelectorAll('#view-alerts .filter-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.resolved === resolved);
+  });
+  try {
+    const data = await fetchJSON('/alerts?resolved=' + resolved);
+    document.getElementById('alert-body').innerHTML = data.length
+      ? data.map(r => `<tr>
+          <td class="mono">#${r.alert_id}</td>
+          <td class="mono">#${r.txn_id}</td>
+          <td>${r.full_name}</td>
+          <td><span class="badge badge-${alertBadge(r.alert_type)}">${r.alert_type}</span></td>
+          <td>${riskBar(r.risk_score)}</td>
+          <td style="max-width:220px;font-size:12px;">${r.description || '—'}</td>
+          <td class="mono">${r.raised_at}</td>
+          <td>${r.resolved==='N'
+            ? `<button class="btn" style="padding:4px 10px;font-size:10px;" onclick="resolveAlert(${r.alert_id})">RESOLVE</button>`
+            : '<span style="color:var(--muted);font-family:var(--mono);font-size:10px;">DONE</span>'}</td>
+        </tr>`).join('')
+      : '<tr><td colspan="8" class="empty">No alerts</td></tr>';
+  } catch(e) { console.error(e); }
+}
+
+document.querySelectorAll('#view-alerts .filter-btn').forEach(b => {
+  b.addEventListener('click', () => loadAlerts(b.dataset.resolved));
+});
+
+async function resolveAlert(id) {
+  await fetch(API + '/alerts/' + id + '/resolve', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({notes: 'Marked resolved via dashboard'})
+  });
+  toast('Alert #' + id + ' resolved');
+  loadAlerts('N');
+}
+
+// ── Accounts ──────────────────────────────────────────────────
+async function loadAccounts() {
+  try {
+    const data = await fetchJSON('/accounts');
+    document.getElementById('acc-body').innerHTML = data.length
+      ? data.map(r => `<tr>
+          <td class="mono">#${r.account_id}</td>
+          <td>${r.full_name}</td>
+          <td class="mono">${r.account_type}</td>
+          <td class="mono">₹${Number(r.balance).toLocaleString('en-IN')}</td>
+          <td><span class="badge badge-${r.status.toLowerCase()}">${r.status}</span></td>
+          <td style="color:${r.open_alerts>0?'var(--warn)':'var(--muted)'}">${r.open_alerts}</td>
+        </tr>`).join('')
+      : '<tr><td colspan="6" class="empty">No accounts</td></tr>';
+  } catch(e) { console.error(e); }
+}
+
+// ── Simulate ──────────────────────────────────────────────────
+async function submitTransaction() {
+  const body = {
+    account_id:    document.getElementById('f-account').value,
+    txn_type:      document.getElementById('f-type').value,
+    amount:        document.getElementById('f-amount').value,
+    merchant:      document.getElementById('f-merchant').value,
+    location_city: document.getElementById('f-city').value,
+    channel:       document.getElementById('f-channel').value
+  };
+  if (!body.account_id || !body.amount) { toast('Fill in all fields'); return; }
+
+  try {
+    const res = await fetch(API + '/transactions', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    const box = document.getElementById('txn-result');
+    box.classList.add('show');
+
+    if (!res.ok) {
+      box.className = 'result-box show danger';
+      box.innerHTML = '⛔ ' + data.error;
+    } else {
+      const r = data.result[0];
+      const cls = r.status === 'APPROVED' ? 'ok' : r.status === 'FLAGGED' ? 'warn' : 'danger';
+      box.className = 'result-box show ' + cls;
+      box.innerHTML = `TXN #${data.txn_id} → STATUS: ${r.status}` +
+        (r.alert_type ? `<br>ALERT: ${r.alert_type} | RISK SCORE: ${r.risk_score}/100<br>${r.description || ''}` : '');
+    }
+  } catch(e) {
+    document.getElementById('txn-result').className = 'result-box show danger';
+    document.getElementById('txn-result').innerHTML = 'Network error. Is Flask running?';
+  }
+}
+
+function fillRapidFire() {
+  document.getElementById('f-account').value  = '5001';
+  document.getElementById('f-type').value     = 'DEBIT';
+  document.getElementById('f-amount').value   = '3000';
+  document.getElementById('f-merchant').value = 'Rapid Test Merchant';
+  document.getElementById('f-city').value     = 'Coimbatore';
+  document.getElementById('f-channel').value  = 'ONLINE';
+}
+function fillHighAmount() {
+  document.getElementById('f-account').value  = '5004';
+  document.getElementById('f-type').value     = 'DEBIT';
+  document.getElementById('f-amount').value   = '150000';
+  document.getElementById('f-merchant').value = 'Suspicious Vendor';
+  document.getElementById('f-city').value     = 'Mumbai';
+  document.getElementById('f-channel').value  = 'ONLINE';
+}
+
+// ── Audit Log ─────────────────────────────────────────────────
+async function loadLogs() {
+  try {
+    const data = await fetchJSON('/logs');
+    document.getElementById('log-body').innerHTML = data.length
+      ? data.map(r => `<tr>
+          <td class="mono">${r.log_id}</td>
+          <td class="mono">${r.txn_id || '—'}</td>
+          <td class="mono">${r.account_id || '—'}</td>
+          <td class="mono" style="color:var(--accent)">${r.event_type}</td>
+          <td>${r.old_status ? `<span class="badge badge-${r.old_status.toLowerCase()}">${r.old_status}</span>` : '—'}</td>
+          <td>${r.new_status ? `<span class="badge badge-${r.new_status.toLowerCase()}">${r.new_status}</span>` : '—'}</td>
+          <td class="mono">${r.logged_at}</td>
+          <td style="font-size:11px;color:var(--muted)">${r.notes || '—'}</td>
+        </tr>`).join('')
+      : '<tr><td colspan="8" class="empty">No logs yet</td></tr>';
+  } catch(e) { console.error(e); }
+}
+
+// ── Batch audit ───────────────────────────────────────────────
+async function runBatchAudit() {
+  try {
+    await fetch(API + '/batch-audit', {method:'POST'});
+    toast('Batch audit complete');
+    loadView('dashboard');
+  } catch { toast('Failed — is Flask running?'); }
+}
+
+function refreshAll() { loadView(currentView()); }
+function currentView() {
+  return document.querySelector('.nav-item.active').dataset.view;
+}
+
+// ── Helpers ───────────────────────────────────────────────────
+async function fetchJSON(path) {
+  const r = await fetch(API + path);
+  return r.json();
+}
+
+function riskBar(score) {
+  const s = Number(score) || 0;
+  const col = s >= 70 ? 'var(--danger)' : s >= 40 ? 'var(--warn)' : 'var(--ok)';
+  return `<div class="risk-bar">
+    <div class="risk-track"><div class="risk-fill" style="width:${s}%;background:${col}"></div></div>
+    <span class="risk-num" style="color:${col}">${s}</span>
+  </div>`;
+}
+
+function alertBadge(type) {
+  const m = {RAPID_FIRE:'blocked', HIGH_AMOUNT:'flagged', GEO_VELOCITY:'pending', BATCH_AUDIT:'flagged'};
+  return m[type] || 'pending';
+}
+
+let toastTimer;
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+// ── Init ──────────────────────────────────────────────────────
+checkDB();
+loadDashboard();
+</script>
+</body>
+</html>
